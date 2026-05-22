@@ -38,6 +38,10 @@ end
 % TX队列
 tx_queue = {};  % 每项为 60字节 uint8 帧
 tx_repeat = 5;  % 每帧重复发送次数
+recent_tx_frames = zeros(0, 60, 'uint8');
+recent_tx_times = zeros(0, 1);
+tx_echo_window_sec = 10;
+max_recent_tx_frames = 128;
 
 %% ==================== 硬件初始化 ====================
 try
@@ -154,7 +158,9 @@ set(h_fig, 'KeyPressFcn', @keypress_callback);
 
         % 加入TX队列
         for i = 1:size(frames, 1)
-            tx_queue{end+1} = frames(i, :);
+            frame = frames(i, :);
+            tx_queue{end+1} = frame;
+            remember_tx_frame(frame);
         end
 
         add_chat(['[本机] ' msg_text], [0 0.4 1]);
@@ -212,6 +218,36 @@ set(h_fig, 'KeyPressFcn', @keypress_callback);
         end
     end
 
+    function remember_tx_frame(frame)
+        recent_tx_frames(end+1, :) = uint8(frame(:).');
+        recent_tx_times(end+1, 1) = now;
+        prune_recent_tx_frames();
+    end
+
+    function tf = is_recent_tx_frame(frame)
+        prune_recent_tx_frames();
+        frame = uint8(frame(:).');
+        tf = false;
+        if isempty(recent_tx_frames) || numel(frame) ~= 60
+            return;
+        end
+        tf = any(all(recent_tx_frames == frame, 2));
+    end
+
+    function prune_recent_tx_frames()
+        if isempty(recent_tx_times)
+            return;
+        end
+        keep = ((now - recent_tx_times) * 86400) <= tx_echo_window_sec;
+        recent_tx_frames = recent_tx_frames(keep, :);
+        recent_tx_times = recent_tx_times(keep);
+        if size(recent_tx_frames, 1) > max_recent_tx_frames
+            start_idx = size(recent_tx_frames, 1) - max_recent_tx_frames + 1;
+            recent_tx_frames = recent_tx_frames(start_idx:end, :);
+            recent_tx_times = recent_tx_times(start_idx:end);
+        end
+    end
+
 %% ==================== 主循环 ====================
 if ~hw_ok
     add_chat('[系统] 进入模拟模式（无硬件）', [1 0.5 0]);
@@ -248,7 +284,7 @@ while ishandle(h_fig)
             input{2} = imag(txdata_frame);
             output = stepImpl(s, input);
 
-            % 同时处理RX数据
+            % 同时处理RX数据；本机回波会在 process_rx_frame 中按完整帧过滤。
             I = output{1}; Q = output{2}; Rx = I + 1i*Q;
             rx_bytes = [];
             crc_ok = false;
@@ -300,6 +336,10 @@ end
         if numel(frame_bytes) ~= 60
             set(status_label, 'String', ...
                 sprintf('状态: 丢弃长度异常的帧 (%d 字节)', numel(frame_bytes)));
+            return;
+        end
+        if is_recent_tx_frame(frame_bytes)
+            set(status_label, 'String', '状态: 已过滤本机回波帧');
             return;
         end
 
