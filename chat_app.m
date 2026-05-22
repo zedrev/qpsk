@@ -1,4 +1,4 @@
-function chat_app(tx_first)
+function chat_app(tx_first, rx_gain_db)
 % QPSK 双人聊天系统 — 基于AD9361硬件
 % 协议: 定长60字节帧, 含序列号/分片/长度字段, CRC32校验
 %
@@ -6,11 +6,19 @@ function chat_app(tx_first)
 %   chat_app(true)  — 本机TX载波高于RX (TX=RX+40kHz)
 %   chat_app(false) — 本机TX载波低于RX (TX=RX-40kHz)，与对方配对使用
 %
+% 天线短距离通信可指定RX增益:
+%   chat_app(true, 45)
+%   chat_app(false, 45)
+%
 % 示例:
 %   设备A: chat_app(true)
 %   设备B: chat_app(false)
 
 if nargin < 1, tx_first = true; end
+if nargin < 2 || isempty(rx_gain_db), rx_gain_db = 45; end
+if ~isscalar(rx_gain_db) || ~isnumeric(rx_gain_db)
+    error('rx_gain_db 必须是数值标量');
+end
 
 %% ==================== 路径初始化 ====================
 proj_root = fileparts(mfilename('fullpath'));
@@ -37,7 +45,7 @@ end
 
 % TX队列
 tx_queue = {};  % 每项为 60字节 uint8 帧
-tx_repeat = 5;  % 每帧重复发送次数
+tx_repeat = 8;  % 天线空口链路比SMA直连更弱，重复发送提高成功率
 recent_tx_frames = zeros(0, 60, 'uint8');
 recent_tx_times = zeros(0, 1);
 tx_echo_window_sec = 10;
@@ -79,7 +87,7 @@ try
     input{s.getInChannel('RX_SAMPLING_FREQ')} = 40e6;
     input{s.getInChannel('RX_RF_BANDWIDTH')}  = 20e6;
     input{s.getInChannel('RX1_GAIN_MODE')}    = 'manual';
-    input{s.getInChannel('RX1_GAIN')}         = 10;
+    input{s.getInChannel('RX1_GAIN')}         = rx_gain_db;
     input{s.getInChannel('TX_LO_FREQ')}       = tx_freq;
     input{s.getInChannel('TX_SAMPLING_FREQ')} = 40e6;
     input{s.getInChannel('TX_RF_BANDWIDTH')}  = 20e6;
@@ -87,7 +95,7 @@ try
     hw_ok = true;
     role_str = 'TX高频侧';
     if ~tx_first, role_str = 'TX低频侧'; end
-    hw_msg = ['硬件已连接 (' role_str ')'];
+    hw_msg = sprintf('硬件已连接 (%s, RX增益 %.1f dB)', role_str, rx_gain_db);
 catch err
     hw_ok = false;
     hw_msg = ['硬件连接失败: ' err.message];
